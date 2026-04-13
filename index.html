@@ -570,6 +570,16 @@ body {
   gap: 8px;
 }
 
+/* contact sheet — tighter grid */
+.gallery-grid.contact-sheet {
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+}
+
+.gallery-grid.contact-sheet .gallery-thumb {
+  aspect-ratio: 1;
+}
+
 /* ── LIGHTBOX ───────────────────────────────────────── */
 .lightbox {
   display: none;
@@ -601,32 +611,66 @@ body {
   box-shadow: 0 8px 40px rgba(0,0,0,0.7);
 }
 
+/* nav arrows — fixed to viewport edges on all screen sizes */
 .lightbox-nav {
-  position: absolute;
-  top: 50%; transform: translateY(-50%);
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
   background: rgba(36,94,220,0.85);
   border: 1px solid rgba(255,255,255,0.2);
   color: #fff;
   font-size: 1.2rem;
-  width: 36px; height: 36px;
+  width: 40px; height: 56px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   border-radius: 3px;
   user-select: none;
   transition: background 0.15s;
+  z-index: 100000;
 }
 
 .lightbox-nav:hover { background: rgba(74,143,255,0.9); }
-.lightbox-prev { left: -48px; }
-.lightbox-next { right: -48px; }
+.lightbox-prev { left: 6px; }
+.lightbox-next { right: 6px; }
 
-.lightbox-caption {
-  font-family: var(--font-title);
-  font-size: 0.9rem;
-  color: rgba(255,255,255,0.6);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+/* slideshow progress bar */
+.slideshow-bar {
+  position: fixed;
+  bottom: 0; left: 0;
+  height: 3px;
+  background: var(--xp-blue);
+  width: 0%;
+  transition: width linear;
+  z-index: 100001;
+  display: none;
 }
+
+.lightbox.slideshow-mode .slideshow-bar { display: block; }
+
+/* slideshow controls */
+.slideshow-controls {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+.lightbox.slideshow-mode .slideshow-controls { display: flex; }
+
+.ss-btn {
+  background: rgba(36,94,220,0.7);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  transition: background 0.15s;
+}
+
+.ss-btn:hover { background: rgba(74,143,255,0.9); }
 
 .lightbox-counter {
   font-family: var(--font-ui);
@@ -1065,6 +1109,7 @@ body {
   .explorer-sidebar { display: none; }
   .folder-grid { grid-template-columns: 1fr 1fr; }
   .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+  .gallery-grid.contact-sheet { grid-template-columns: repeat(4, 1fr); gap: 2px; }
   .hero-inner { flex-direction: column; }
   .taskbar-btn { display: none; }
 }
@@ -1146,8 +1191,8 @@ body {
     <div class="tool-btn" id="btn-back" onclick="closeGallery()" style="display:none">◀ Back</div>
     <div class="tool-btn">▶ Forward</div>
     <div class="tool-sep"></div>
-    <div class="tool-btn">⊞ Thumbnails</div>
-    <div class="tool-btn">⧉ Slideshow</div>
+    <div class="tool-btn" id="btn-thumbnails" onclick="toggleContactSheet()">⊞ Thumbnails</div>
+    <div class="tool-btn" onclick="startSlideshow()">⧉ Slideshow</div>
   </div>
   <div class="address-bar">
     <span class="address-label">Address</span>
@@ -1523,12 +1568,17 @@ body {
 <!-- ══ LIGHTBOX ══════════════════════════════════════════ -->
 <div class="lightbox" id="lightbox" onclick="closeLightboxOnBackdrop(event)">
   <div class="lightbox-close" onclick="closeLightbox()">✕</div>
-  <div class="lightbox-img-wrap">
-    <div class="lightbox-nav lightbox-prev" onclick="lbNav(-1); event.stopPropagation()">◀</div>
+  <div class="lightbox-nav lightbox-prev" onclick="lbNav(-1); event.stopPropagation()">◀</div>
+  <div class="lightbox-img-wrap" id="lb-img-wrap">
     <img id="lightbox-img" src="" alt="">
-    <div class="lightbox-nav lightbox-next" onclick="lbNav(1); event.stopPropagation()">▶</div>
   </div>
+  <div class="lightbox-nav lightbox-next" onclick="lbNav(1); event.stopPropagation()">▶</div>
   <div class="lightbox-counter" id="lightbox-counter"></div>
+  <div class="slideshow-controls">
+    <div class="ss-btn" id="ss-playpause" onclick="toggleSlideshowPause(); event.stopPropagation()">⏸ Pause</div>
+    <div class="ss-btn" onclick="closeLightbox(); event.stopPropagation()">■ Stop</div>
+  </div>
+  <div class="slideshow-bar" id="slideshow-bar"></div>
 </div>
 
 <script>
@@ -1601,20 +1651,23 @@ body {
 
 <script>
   /* ── LIGHTBOX ──────────────────────────────────────── */
-  let lbImages = [];
-  let lbIndex  = 0;
+  let lbImages      = [];
+  let lbIndex       = 0;
+  let ssTimer       = null;
+  let ssPaused      = false;
+  let ssMode        = false;
+  const SS_DURATION = 6000; // 6 seconds
 
   function openLightbox(clickedSrc) {
     const activeGallery = document.querySelector('.gallery-view.active');
     if (!activeGallery) return;
     const thumbs = activeGallery.querySelectorAll('.gallery-thumb img');
     lbImages = Array.from(thumbs).map(t => t.src);
-
-    // Match by the filename portion only so absolute vs relative doesn't matter
     const clickedFile = clickedSrc.split('/').pop();
     lbIndex = lbImages.findIndex(s => s.split('/').pop() === clickedFile);
     if (lbIndex < 0) lbIndex = 0;
-
+    ssMode = false;
+    document.getElementById('lightbox').classList.remove('slideshow-mode');
     renderLightbox();
     document.getElementById('lightbox').classList.add('open');
     document.body.style.overflow = 'hidden';
@@ -1629,23 +1682,124 @@ body {
   function lbNav(dir) {
     lbIndex = (lbIndex + dir + lbImages.length) % lbImages.length;
     renderLightbox();
+    if (ssMode && !ssPaused) resetSsTimer();
   }
 
   function closeLightbox() {
     document.getElementById('lightbox').classList.remove('open');
+    document.getElementById('lightbox').classList.remove('slideshow-mode');
     document.body.style.overflow = '';
+    stopSsTimer();
+    ssMode = false;
+    ssPaused = false;
   }
 
   function closeLightboxOnBackdrop(e) {
     if (e.target === document.getElementById('lightbox')) closeLightbox();
   }
 
+  /* ── SLIDESHOW ─────────────────────────────────────── */
+  function startSlideshow() {
+    const activeGallery = document.querySelector('.gallery-view.active');
+    if (!activeGallery) return;
+    const thumbs = activeGallery.querySelectorAll('.gallery-thumb img');
+    lbImages = Array.from(thumbs).map(t => t.src);
+    lbIndex  = 0;
+    ssMode   = true;
+    ssPaused = false;
+    document.getElementById('ss-playpause').textContent = '⏸ Pause';
+    document.getElementById('lightbox').classList.add('open', 'slideshow-mode');
+    document.body.style.overflow = 'hidden';
+    renderLightbox();
+    resetSsTimer();
+  }
+
+  function resetSsTimer() {
+    stopSsTimer();
+    const bar = document.getElementById('slideshow-bar');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    // force reflow
+    bar.offsetWidth;
+    bar.style.transition = `width ${SS_DURATION}ms linear`;
+    bar.style.width = '100%';
+    ssTimer = setTimeout(() => {
+      lbIndex = (lbIndex + 1) % lbImages.length;
+      renderLightbox();
+      resetSsTimer();
+    }, SS_DURATION);
+  }
+
+  function stopSsTimer() {
+    if (ssTimer) { clearTimeout(ssTimer); ssTimer = null; }
+    const bar = document.getElementById('slideshow-bar');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+  }
+
+  function toggleSlideshowPause() {
+    if (!ssMode) return;
+    ssPaused = !ssPaused;
+    document.getElementById('ss-playpause').textContent = ssPaused ? '▶ Play' : '⏸ Pause';
+    if (ssPaused) {
+      stopSsTimer();
+    } else {
+      resetSsTimer();
+    }
+  }
+
+  /* ── THUMBNAIL TOGGLE ──────────────────────────────── */
+  let contactSheet = false;
+
+  function toggleContactSheet() {
+    const activeGallery = document.querySelector('.gallery-view.active');
+    if (!activeGallery) return;
+    const grids = activeGallery.querySelectorAll('.gallery-grid');
+    const btn   = document.getElementById('btn-thumbnails');
+    contactSheet = !contactSheet;
+    grids.forEach(g => g.classList.toggle('contact-sheet', contactSheet));
+    btn.style.background = contactSheet
+      ? 'linear-gradient(180deg, #d0ccc4 0%, #e8e4d8 100%)'
+      : '';
+    btn.style.borderTopColor    = contactSheet ? 'var(--xp-silver-dk)' : '';
+    btn.style.borderLeftColor   = contactSheet ? 'var(--xp-silver-dk)' : '';
+  }
+
+  /* reset contact sheet state when closing gallery */
+  const _origCloseGallery = closeGallery;
+  closeGallery = function() {
+    _origCloseGallery();
+    contactSheet = false;
+    document.querySelectorAll('.gallery-grid').forEach(g => g.classList.remove('contact-sheet'));
+    const btn = document.getElementById('btn-thumbnails');
+    if (btn) { btn.style.background = ''; btn.style.borderTopColor = ''; btn.style.borderLeftColor = ''; }
+  };
+
+  /* ── KEYBOARD ──────────────────────────────────────── */
   document.addEventListener('keydown', e => {
     if (!document.getElementById('lightbox').classList.contains('open')) return;
-    if (e.key === 'ArrowRight') lbNav(1);
-    if (e.key === 'ArrowLeft')  lbNav(-1);
-    if (e.key === 'Escape')     closeLightbox();
+    if (e.key === 'ArrowRight') { lbNav(1); }
+    if (e.key === 'ArrowLeft')  { lbNav(-1); }
+    if (e.key === ' ')          { if (ssMode) toggleSlideshowPause(); e.preventDefault(); }
+    if (e.key === 'Escape')     { closeLightbox(); }
   });
+
+  /* ── SWIPE (MOBILE) ────────────────────────────────── */
+  let touchStartX = 0;
+  let touchStartY = 0;
+
+  document.getElementById('lightbox').addEventListener('touchstart', e => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+
+  document.getElementById('lightbox').addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
+      dx < 0 ? lbNav(1) : lbNav(-1);
+    }
+  }, { passive: true });
 </script>
 </body>
 </html>
